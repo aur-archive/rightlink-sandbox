@@ -1,0 +1,132 @@
+# $Id$
+# Maintainer: Chris Fordham <chris at fordham-nagy dot id dot au> aka flaccid
+# Contributor: Brian Szmyd <brian.szmyd@rightscale.com>
+# Package Source: https://github.com/flaccid/archlinux-packages/blob/master/rightlink-sandbox/PKGBUILD
+
+pkgname=rightlink-sandbox
+pkgver=5.9.5
+pkgrel=6
+pkgdesc='RightScale RightLink Ruby/RubyGems sandbox.'
+arch=('i686' 'x86_64' 'armv6h')
+url="https://github.com/rightscale/right_link/"
+license=(MIT RUBY)
+makedepends=(autoconf sed tar libxslt ruby1.8 rubygems1.8)
+conflicts=(rightscale-deb)
+options=(emptydirs strip !docs !libtool !staticlibs)
+
+_rl_prefix="/opt/rightscale"
+_sandbox_dir="${_rl_prefix}/sandbox"
+_rb_gitname=ruby
+_rb_pkgver=1.8.7-p371
+_rb_gitdir="${_rb_gitname}-${_rb_pkgver}"
+_rg_gitname=rubygems
+_rg_pkgver=1.6.2
+_rg_gitdir="${_rg_gitname}-${_rg_pkgver}"
+_rg_install_opts='--no-rdoc --no-ri'
+
+source=(
+	"http://ftp.ruby-lang.org/pub/ruby/1.8/${_rb_gitname}-${_rb_pkgver}.tar.gz"
+	"http://production.cf.rubygems.org/rubygems/${_rg_gitname}-${_rg_pkgver}.tgz"
+  "https://github.com/rightscale/right_link/archive/v$pkgver.tar.gz"
+)
+md5sums=('653f07bb45f03d0bf3910491288764df'
+         '0c95a9869914ba1a45bf71d3b8048420'
+         'c47e01e1096841e85d95c148819530f9')
+
+ruby_cmd() {
+  # These are some LOAD_PATHs that need to be manually added to ruby
+  # since it's not installed in the /opt yet.
+  local lib_paths=$(for path in ${ruby_libs[@]}; do echo "-I${ruby_dir}/lib/ruby/${path}"; done)
+
+  RUBYOPT="${lib_paths}" \
+    ${ruby_dir}/bin/ruby ${@}
+}
+
+build() {
+  msg 'Building Ruby...'
+  pushd ${_rb_gitdir}
+    autoconf
+    ./configure \
+      --prefix="${_sandbox_dir}" \
+      --enable-pthread
+    make
+  popd
+}
+
+package() {
+  ruby_dir=${pkgdir}/${_sandbox_dir}
+  ruby_libs=()
+
+  msg 'Installing Ruby into package...'
+  pushd ${_rb_gitdir}
+    make DESTDIR=${pkgdir} install
+    ruby_libs+=(1.8 1.8/${CARCH}-linux)
+  popd
+
+  msg 'Installing RubyGems into package...'
+  pushd ${_rg_gitdir}
+    msg 'Running setup.rb...'
+    ruby_cmd ./setup.rb --no-ri --no-rdoc
+
+    ruby_libs+=(site_ruby/1.8)
+
+    msg "Modifying shebang in ${ruby_dir}/bin/gem..."
+    sed -i "s@${pkgdir}@@" ${ruby_dir}/bin/gem
+  popd
+
+  msg 'Installing bundler RubyGem...'
+  gem-1.8 install bundler --user-install $_rg_install_opts
+    
+  msg 'Copying bundle(r) RubyGems from system user to sandbox in pkg...'
+  mkdir -p ${pkgdir}/${_sandbox_dir}/lib/ruby/gems/1.8/gems
+  mkdir -p ${pkgdir}/${_sandbox_dir}/lib/ruby/gems/1.8/bin
+  cp -R "$HOME"/.gem/ruby/1.8/gems/bundle* ${pkgdir}/${_sandbox_dir}/lib/ruby/gems/1.8/gems/
+  cp -R "$HOME"/.gem/ruby/1.8/bin/bundle ${pkgdir}/${_sandbox_dir}/lib/ruby/gems/1.8/bin/
+
+  pushd "$srcdir/right_link-$pkgver"
+    msg "Displaying package's gem environment."
+    ruby_cmd ${ruby_dir}/bin/gem env
+
+    msg 'Performing bundle package...'
+    ruby_cmd ${ruby_dir}/lib/ruby/gems/1.8/bin/bundle package
+
+    # display available rake tasks
+    ruby_cmd ${ruby_dir}/lib/ruby/gems/1.8/bin/rake -T
+    
+    msg 'Performing rake for building right_link gem...'
+    ruby_cmd ${ruby_dir}/lib/ruby/gems/1.8/bin/rake clean
+    ruby_cmd ${ruby_dir}/lib/ruby/gems/1.8/bin/rake clobber
+    ruby_cmd ${ruby_dir}/lib/ruby/gems/1.8/bin/rake clobber_package
+    ruby_cmd ${ruby_dir}/lib/ruby/gems/1.8/bin/rake gem
+    
+    msg 'Installing right_link gem...'
+    ruby_cmd ${ruby_dir}/bin/gem install "$srcdir/right_link-$pkgver/pkg/right_link-$pkgver.gem"
+    # omg, why !?
+    [ -e "$HOME/.gem/ruby/1.8/gems/right_link-5.9.5" ] && \
+      cp -R "$HOME/.gem/ruby/1.8/gems/right_link-5.9.5" ${pkgdir}/${_sandbox_dir}/lib/ruby/gems/1.8/gems/
+    
+    # TODO: find out why and fix the voodoo
+    msg 'Removing illegal alien gems...'
+    ruby_cmd ${ruby_dir}/bin/gem uninstall erubis --version=2.7.0
+    ruby_cmd ${ruby_dir}/bin/gem uninstall mixlib-cli --version=1.4.0
+    ruby_cmd ${ruby_dir}/bin/gem uninstall mixlib-config --version=2.1.0
+    ruby_cmd ${ruby_dir}/bin/gem uninstall mixlib-shellout --version=1.3.0
+    ruby_cmd ${ruby_dir}/bin/gem uninstall systemu --version=2.5.2
+    # these extra ones should be ok to not remove?
+    #ruby_cmd ${ruby_dir}/bin/gem uninstall chef-zero --version=1.7.2
+    #ruby_cmd ${ruby_dir}/bin/gem uninstall coderay --version=1.1.0
+    #ruby_cmd ${ruby_dir}/bin/gem uninstall diff-lcs --version=1.2.5
+    #ruby_cmd ${ruby_dir}/bin/gem uninstall hashie --version=2.0.5
+    #ruby_cmd ${ruby_dir}/bin/gem uninstall method_source --version=0.8.2
+    #ruby_cmd ${ruby_dir}/bin/gem uninstall pry --version=0.9.12.4
+    #ruby_cmd ${ruby_dir}/bin/gem uninstall puma --version=1.6.3
+    #ruby_cmd ${ruby_dir}/bin/gem uninstall rack --version=1.5.2
+    #ruby_cmd ${ruby_dir}/bin/gem uninstall slop --version=3.4.7
+
+    msg 'Installing vendor/cache gems...'
+    mkdir -p "${pkgdir}${_rl_prefix}/right_link/vendor/cache"
+    cp -Rv "$srcdir/right_link-$pkgver/vendor/cache/"* "${pkgdir}${_rl_prefix}/right_link/vendor/cache/"
+  popd
+}
+
+# vim:syntax=sh
